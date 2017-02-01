@@ -1,0 +1,308 @@
+#!/bin/bash
+echo "$0 $*"
+usage="usage: $0 dicomdir outfile [-analyze | -nifti | -ecat | -ecat7 | -dicom | -sdt] [-x | -y | -z] [-tran | -cor | -sag] [-tolower | -toupper] [-s series] [-res between_res] [-reverse_images] [-testonly] [-originmapsonly]"
+# parse parameters
+unset indicomdir
+unset outfile
+unset series_list
+unset testonly
+unset originmapsonly
+unset inres
+unset incatdim
+unset inorient
+sortimagescmd="sort -nk 7"
+outtype=""
+command="$0 $*";
+poption='f'
+while [ $# -gt 0 ] ; do
+  case "$1" in
+  '-help')
+    echo "$usage"
+    exit 0
+    ;;
+  '-analyze')
+    outtype=$1
+    ;;
+  '-nifti')
+    outtype=$1
+    ;;
+  '-ecat')
+    outtype=$1
+    ;;
+  '-ecat7')
+    outtype=$1
+    ;;
+  '-dicom')
+    outtype=$1
+    ;;
+  '-sdt')
+    outtype=$1
+    ;;
+  '-x')
+    incatdim="x"
+    ;;
+  '-y')
+    incatdim="y"
+    ;;
+  '-z')
+    incatdim="z"
+    ;;
+  '-tran')
+    inorient="tran"
+    ;;
+  '-cor')
+    inorient="cor"
+    ;;
+  '-sag')
+    inorient="sag"
+    ;;
+  '-tolower')
+    poption='tolower(f)'
+    ;;
+  '-toupper')
+    poption='toupper(f)'
+    ;;
+  '-s')
+    shift
+    if [ $# -le 0 ] ; then exec echo "missing series list"; fi
+    series_list="$1"
+    ;;
+  '-res')
+    shift
+    if [ $# -le 0 ] ; then exec echo "missing between slice resolution"; fi
+    inres="$1"
+    ;;
+  '-reverse_images')
+    sortimagescmd="sort -nrk 7"
+    ;;
+  '-testonly')
+    testonly=TRUE
+    ;;
+  '-originmapsonly')
+    originmapsonly=TRUE
+    ;;
+  *)
+    if [ ! $indicomdir ] ; then
+      indicomdir="$1"
+    else
+	if [ ! $outfile ] ; then
+	    outfile="$1"
+	else
+	    echo "unknown parameter = $1"
+	    echo "$usage"
+	    exit 1
+	fi
+    fi
+    ;;
+  esac
+  shift
+done
+
+if [ ! ${indicomdir} ] ; then
+  echo "missing dicomdir"
+  echo "$usage"
+  exit 1
+fi
+if [ ! ${outfile} ] ; then
+  echo "missing outfile"
+  echo "$usage"
+  exit 1
+fi
+
+dicomdir=`dirname $indicomdir`
+
+echo indicomdir=$indicomdir
+echo outfile=$outfile
+
+dicom_fs_info_file=${outfile}dicom_fs_info.txt
+
+if [ -e $dicom_fs_info_file ] ; then
+  echo "fs_info file=$dicom_fs_info_file exists"
+  echo "remove or use a different outfile name and retry"
+  exit 1
+fi
+
+dicomheader $indicomdir | strings | grep "^FS_INFO:" > $dicom_fs_info_file
+
+if [ ! ${series_list} ] ; then
+  series_list=(`cat $dicom_fs_info_file | sed 's/=/ /g' | sed 's/\"//g' | awk 'BEGIN {series="none"} /IMAGE value/ { for(x=1; x<=NF-2;x++) {if($x == "SERIES") {x+=2; if($x != series) {series=$x; print $x}} }}' `);
+fi
+
+echo number of series=${#series_list[*]} series_list=${series_list[*]}
+series_list=(`echo ${series_list[*]} | sed 's/ /\n/g' | sort -n | uniq`)
+echo number of unique series=${#series_list[*]} ordered series_list=${series_list[*]}
+
+for series in ${series_list[*]} ; do
+  echo series=$series
+  files=()
+
+  series_instance_uids=(`cat $dicom_fs_info_file | sed 's/=/ /g' | sed 's/\"//g' | awk 'BEGIN {uids="none"} /SERIES value *'$series' / { for(x=1; x<=NF-2;x++) {if($x == "SERIES_INSTANCE_UID") {x+=2; if($x != uids) {uids=$x; print $x}} }}' `);
+
+  checkforvalues="/SERIES value ${series} /"
+  outfilenames=${outfile}s${series}
+
+  echo series=$series has ${#series_instance_uids[*]} series instance uids
+  echo series_instance_uids=${series_instance_uids[*]}
+
+  if (( ${#series_instance_uids[*]} > 1 )) ; then
+
+    checkforvalues=(${series_instance_uids[*]})
+    outfilenames=($series_instance_uids[*])
+    uid_index=0
+    for series_instance_uid in ${series_instance_uids[*]} ; do
+      checkforvalues[$uid_index]="/SERIES_INSTANCE_UID value ${series_instance_uid} /"
+      outfilenames[$uid_index]=${outfile}s${series}_${uid_index}
+      let uid_index++
+    done
+  fi
+
+  echo checkforvalues=$checkforvalues
+  echo outfilenames=$outfilenames
+
+  for (( i=0; i<${#checkforvalues[*]}; i++)) ; do
+
+#    echo converting $checkforvalues[$i]
+    echo "converting checkforvalues[$i]=${checkforvalues[$i]}"
+    echo "outfile[$i]=${outfilenames[$i]}"
+
+    if [ ${incatdim} ] ; then
+      catdim=$incatdim
+    else
+      catdim="notset"
+    fi
+
+    if [ ${inorient} ] ; then
+      orient=$inorient
+    else
+      orient="notset"
+    fi
+
+    if [ ${inres} ] ; then
+      res=$inres
+    else
+      res=`cat $dicom_fs_info_file | sed  -e 's/=/ /g' -e 's/\"//g' -e 's/  / /g' | ${sortimagescmd}  | awk 'BEGIN {first="true";res="notset"} '"${checkforvalues[$i]}"' && /POSITION / {{for(x=1; x<=NF-2;x++) {if($x == "POSITION"){x+=2; n=split($x,a,"\\\"); z=a[n];}}}; if(first == "true") {lastz=z; first="false";} else if(lastz > z) {res=(lastz - z) * 1e-3; exit} else {res=(z - lastz) * 1e-3; exit}} END {print res;}'`
+    fi
+
+    files=(`cat $dicom_fs_info_file | sed -e 's/=/ /g' -e 's/\"//g' -e 's#\\\#/#g' -e 's/  / /g' | ${sortimagescmd} | awk "${checkforvalues[$i]}"' {{for(x=1; x<=NF-2;x++) {if($x == "FILE"){x+=2; f=$x;}}} {printf "'$dicomdir'/%s ", '$poption';}}'`)
+    position1=""
+    position2=""
+    orientation1=""
+    if (( ${#files[*]} > 0 )) ; then
+	position1=(`dicomheader ${files[0]} | strings | sed 's/\\\/ /g' | awk -F= '/Image Position \(Patient\)/ {print $3}' | sed 's/\"//g'`)
+	if (( ${#position1[*]} != 3 )) ; then
+	   echo "failed locating proper tagname=Image Position (Patient) in file=${file[0]}"
+	fi
+	orientation1=(`dicomheader ${files[0]} | strings | sed 's/\\\/ /g' | awk -F= '/Image Orientation \(Patient\)/ {print $3}' | sed 's/\"//g'`)
+	if (( ${#orientation1[*]} != 6 )) ; then
+	   echo "failed locating proper tagname=Image Orientation (Patient) in file=${file[0]}"
+	fi
+#	if [[ ( $res == "notset" || $catdim == "notset" ) && ${#files[*]} > 1 ]] ; then
+	if [[ ${#files[*]} > 1 ]] ; then
+	    position2=(`dicomheader ${files[1]} | strings | sed 's/\\\/ /g' | awk -F= '/Image Position \(Patient\)/ {print $3}' | sed 's/\"//g'`)
+	    if (( ${#position2[*]} != 3 )) ; then
+		echo "failed locating proper tagname=Image Position (Patient) in file=${files[1]}"
+	    fi
+	fi
+    fi
+
+    echo position1 size=${#position1[*]} position1=${position1[*]}
+    echo position2 size=${#position2[*]} position2=${position2[*]}
+    echo orientation1 size=${#orientation1[*]} orientation1=${orientation1[*]}
+
+    if [[ $res == "notset" && ${#position1[*]} == 3 && ${#position2[*]} == 3 ]] ; then
+	res=`echo ${position1[*]} ${position2[*]} | awk '{if($1 > $4) x=$1-$4; else x=$4-$1;if($2 > $5) y=$2-$5; else y=$5-$2; if($3 > $6) z=$3-$6; else z=$6-$3; if(x > y && x > z) print x*1e-3; else if(y > z) print y*1e-3; else print z*1e-3;}'`
+    fi
+
+# jtl 04/01/13 removed setting catdim based on position because concatenation usually needs to be along the slice(z) dimension no matter what is considered the z axis
+#    if [[ $catdim == "notset" && ${#position1[*]} == 3 && ${#position2[*]} == 3 ]] ; then
+#	catdim=`echo $position1 $position2 | awk '{if($1 > $4) x=$1-$4; else x=$4-$1;if($2 > $5) y=$2-$5; else y=$5-$2; if($3 > $6) z=$3-$6; else z=$6-$3; if(x > y && x > z) print "x"; else if(y > z) print "y"; else print "z";}'`
+#    fi
+
+# jtl 04/02/13 try to figure out orientation stuff
+    if [[ $orient == "notset" ]] ; then
+      if [[ ${#orientation1[*]} == 6 ]] ; then
+	orient=`echo ${orientation1[*]} | awk '{if($1 == 0 && $4 == 0) print "sag"; else if($2 == 0 && $5 == 0) print "cor"; else if ($3 == 0 && $6 == 0) print "tran"; else print "notset";}'`
+      fi
+      if [[ $orient == "notset" && ${#position1[*]} == 3 && ${#position2[*]} == 3 ]] ; then
+	orient=`echo ${position1[*]} ${position2[*]} | awk '{if($1 > $4) x=$1-$4; else x=$4-$1;if($2 > $5) y=$2-$5; else y=$5-$2; if($3 > $6) z=$3-$6; else z=$6-$3; if(x > y && x > z) print "sag"; else if(y > z) print "cor"; else print "tran";}'`
+      fi
+    fi
+
+# awk angle calculation ie angledegrees=`echo 1 -1 | awk '{print 180*atan2($1, $2)/atan2(0,-1);}'`
+    mapfilescale=(1.0 1.0 1.0)
+    mapfilerelrot=(0 0 0)
+# try setting map file scales for negative incrementing slices
+    if [[ ${#position1[*]} == 3 && ${#position2[*]} == 3 ]] ; then
+      if [[ $orient == "cor" ]] ; then
+	mapfilescale[0]=`echo ${position1[0]} ${position2[0]} | awk '{if($1 < $2) print "-1.0"; else print "1.0";}'`
+      elif [[ $orient == "sag" ]] ; then
+	mapfilescale[1]=`echo ${position1[1]} ${position2[1]} | awk '{if($1 < $2) print "-1.0"; else print "1.0";}'`
+      elif [[ $orient == "tran" ]] ; then
+	mapfilescale[2]=`echo ${position1[2]} ${position2[2]} | awk '{if($1 < $2) print "-1.0"; else print "1.0";}'`
+      fi
+    fi
+
+    echo res=$res
+    if [[ $res == "notset" ]] ; then
+      echo "between slice resolution not set, found or calculated -- will default to 1 meter"
+      echo "between slice resolution can be set manually with -res option"
+      resopt=""
+    else
+      resopt="-res $res"
+    fi
+
+    echo catdim=$catdim
+    if [[ $catdim == "notset" ]] ; then
+      echo "slice dimension not set, found or calculated -- will default to z(transverse slices)"
+      echo "slice dimension can be set manually with option -x or -y or -z"
+      catdimopt=""
+    else
+      catdimopt="-dim $catdim"
+    fi
+
+    echo orient=$orient
+    if [[ $orient == "notset" ]] ; then
+      echo "orientation not set, found or calculated -- will default"
+      echo "slice orientation can be set manually with option -cor or -sag or -tran"
+      orientopt=""
+    else
+      orientopt="-$orient"
+    fi
+
+    if (( ${#files[*]} > 0 )) ; then
+      echo files=${files[*]}
+      echo catimgs $outtype $catdimopt $orientopt -o "${outfilenames[$i]}" $resopt ${files[*]}
+      if [ ! ${testonly} ] ; then
+	if (( ${#position1[*]} == 3 )) ; then
+	    echo ${position1[*]} | awk '{printf "TomoOrig(mm)=(%.8f,%.8f,%.8f)\n",-$1,-$2,-$3;}' | tee "${outfilenames[$i]}_orig.map"
+	    echo "Scale=(${mapfilescale[0]},${mapfilescale[1]},${mapfilescale[2]})" | tee -a "${outfilenames[$i]}_orig.map"
+	    echo "RelRot(deg)=(${mapfilerelrot[0]},${mapfilerelrot[1]},${mapfilerelrot[2]})" | tee -a "${outfilenames[$i]}_orig.map"
+	fi
+        if [ ! $originmapsonly ] ; then
+	  outlogfile="${outfilenames[$i]}.log"
+	  catimgs $outtype $catdimopt $orientopt -o "${outfilenames[$i]}" $resopt ${files[*]}
+	  if [ $? -ne 0 ] ; then
+# try nifti outtype
+	    echo "** warning catimgs failed with outtype=$outtype **"
+	    echo "** often caused by RGB not supported so trying DICOM file type **"
+	    catimgs -dicom $catdimopt $orientopt -o "${outfilenames[$i]}.dcm" $resopt ${files[*]}
+	    outlogfile="${outfilenames[$i]}.dcm.log"
+	  fi
+	  echo "script command: $command" >> "${outlogfile}"
+	  echo "this file contains images with dicomdir property ${checkforvalues[$i]}" >> "${outlogfile}"
+        fi
+      fi
+    fi
+
+#    @ i ++
+  done
+
+done
+
+# @ series_index ++
+# if($series_index <= $#series_list) goto BEGIN_OUTER_SERIES_LOOP
+# END_OUTER_SERIES_LOOP:
+
+#CLEAN_UP_AND_EXIT:
+#rm -f $dicom_fs_info_file
+#end csh
