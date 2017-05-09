@@ -1,0 +1,6 @@
+#!/bin/csh -f
+
+echo calling addimgs with -avg option
+addimgs -avg $*
+
+#end csh

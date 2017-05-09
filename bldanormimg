@@ -1,0 +1,60 @@
+#!/bin/csh 
+set usage="usage: bldanormimg [-tp threshpercent] [-rf normalize_based_on_region_template_file] infile outfile"
+# parse parameters
+set threshpercent=30
+set mean_tf_opt=""
+set infile="notset"
+set outfile="notset"
+set copyargs="$*"
+
+while($#argv > 0)
+  switch ($1)
+  case "-help"
+    echo "$usage"
+    exit 0
+    breaksw
+  case "-tp"
+    shift argv
+    if($#argv == 0)then
+      echo "bldanormimg: missing threshprecent"; echo "$usage"; exit 1
+    endif
+    set threshpercent="$argv[1]"
+    breaksw
+  case "-rf"
+    shift argv
+    if($#argv == 0)then
+      echo "bldanormimg: missing normalize_based_on_region_template_file"; echo "$usage"; exit 1
+    endif
+    set mean_tf_opt="-tf $argv[1]"
+    breaksw
+  default:
+    if($infile == "notset") then
+      set infile="$argv[1]"
+    else if($outfile == "notset") then
+      set outfile="$argv[1]"
+    else
+      echo "bldanormimg: unknown parameter $argv[1]"; echo "$usage"; exit 1
+    endif
+    breaksw
+  endsw
+  shift argv
+end
+if($infile == "notset") then
+  echo "bldanormimg: missing infile"; echo "$usage"; exit 1
+else if($outfile == "notset") then
+  echo "bldanormimg: missing infile"; echo "$usage"; exit 1
+endif
+
+  echo $infile $outfile
+# 02/23/2015 added -scientific & -precision 12 flags to roistats mainly because of ADNI data with fractional values
+  set max=`roistats $infile -max -notext -scientific -precision 13`
+# 06/23/2014 switched to awk because bc does not handle E or e #  set thresh=`echo "0.01*$threshpercent*$max" | bc -l`
+  set thresh=`awk 'BEGIN {printf "%9.13g", 0.01*'$threshpercent'*'$max';}'`
+# 02/23/2015 added -scientific & -precision 12 flags to roistats mainly because of ADNI data with fractional values
+  set mean=`roistats $infile ${mean_tf_opt} -tn $thresh -mean -notext -scientific -precision 13`
+# 06/23/2014 switched to awk because bc does not handle E or e  # set scale=`echo "1000.0/$mean" | bc -l`
+  set scale=`awk 'BEGIN {printf "%9.13g", 1000.0/('$mean');}'`
+  echo max=$max thresh=$thresh mean=$mean scale=$scale
+  scaleimg $infile $outfile -s $scale -set -ge $thresh
+  echo "** scaleimg invoked by script command: $0 $copyargs" >> ${outfile}.log
+#end csh

@@ -1,0 +1,54 @@
+#!/bin/csh -f
+set usage="usage: presmooth [-gs filteropt] [-ext extension]  file1 [file2 [file3 [...]]]"
+
+
+set filteropt="-gs 1.5,59"
+set ext="gs1p5";
+set filelist="";
+
+# parse parameters
+while($#argv > 0)
+  switch ($1)
+  case "-help"
+    echo "$usage"
+    exit 0
+    breaksw
+  case "-gs"
+    shift argv
+    if($#argv == 0)then
+      echo "presmooth: missing filteropt"; echo "$usage"; exit 1
+    endif
+    set filteropt="-gs $argv[1]"
+    breaksw
+  case "-ext"
+    shift argv
+    if($#argv == 0)then
+      echo "presmooth: missing extension"; echo "$usage"; exit 1
+    endif
+    set ext="$argv[1]"
+    breaksw
+  default:
+    set filelist="$filelist $1"
+    breaksw
+  endsw
+  shift argv
+end
+
+foreach infile ($filelist)
+  set outfile=`dirname ${infile}`/`basename ${infile} .img`_${ext}
+  if(! -e ${outfile}.img ) then
+    set tmp1=${outfile}_$$_tmp1
+    set tmp2=${outfile}_$$_tmp2
+    date; echo first dim
+    onedfilter $infile -o $tmp1 ${filteropt} -dim z -noextrapad
+    date; echo second dim
+    onedfilter $tmp1 -o $tmp2 ${filteropt} -dim y -noextrapad
+    date; echo third dim
+    onedfilter $tmp2 -o $outfile ${filteropt} -dim x -noextrapad
+    date;
+    rm -f ${tmp1}.{img,hdr,log} ${tmp2}.{img,hdr,log}
+  else
+    echo filtered file ${outfile}.img already exists
+  endif
+end
+#end csh
